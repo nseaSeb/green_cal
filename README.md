@@ -69,9 +69,6 @@ GreenCal.calendar(loc, Date.range(~D[2026-07-01], ~D[2026-07-31]),
 # Spread a year over the schedulers:
 GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), parallel: true)
 
-# Skip the four geocentric searches when you only read the Sun:
-GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), events: false)
-
 # Exact instants of phases, apsides, nodes and standstills (geocentric):
 GreenCal.lunar_timeline(Date.range(~D[2026-08-01], ~D[2026-08-31]))
 #=> [%{family: :phase, type: :last_quarter, at: ~U[2026-08-06 02:21:49Z],

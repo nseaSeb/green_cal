@@ -226,8 +226,6 @@ Pure arithmetic, no cache, no NIF. Days are independent, so a year spreads
 over the schedulers; the four geocentric searches are independent of each
 other, so they parallelize too — and identically, down to the last bit.
 
-`events: false` skips those four searches for code that only reads the Sun.
-
 ```elixir
 range = Date.range(~D[2026-01-01], ~D[2026-12-31])
 
@@ -236,11 +234,14 @@ time = fn fun -> "#{div(elem(:timer.tc(fun), 0), 1000)} ms" end
 %{
   "calendar/3, 365 days" => time.(fn -> GreenCal.calendar(loc, range) end),
   "calendar/3, parallel: true" => time.(fn -> GreenCal.calendar(loc, range, parallel: true) end),
-  "calendar/3, events: false" => time.(fn -> GreenCal.calendar(loc, range, events: false) end),
   "lunar_timeline/2, one year" => time.(fn -> GreenCal.lunar_timeline(range) end),
   "lunar_timeline/2, parallel: true" => time.(fn -> GreenCal.lunar_timeline(range, parallel: true) end)
 }
 ```
+
+Computing many places at once, note that only the topocentric families
+change: get the geocentric instants once from `GreenCal.lunar_timeline/2`
+rather than re-deriving them per place.
 
 ## Validation — the library against published references
 

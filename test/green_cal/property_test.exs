@@ -150,7 +150,7 @@ defmodule GreenCal.PropertyTest do
           {:moon, :set, day.moon.set}
         ] ++
           for {family, event} <- [
-                {:phase, day.moon.phase_instant},
+                {:phase, day.moon.phase_change},
                 {:apsis, day.moon.apsis},
                 {:node, day.moon.node},
                 {:standstill, day.moon.standstill}

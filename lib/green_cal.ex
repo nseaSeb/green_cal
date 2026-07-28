@@ -48,15 +48,19 @@ defmodule GreenCal do
       then runs from local midnight to local midnight and every `DateTime`
       is returned in that zone. Requires a configured time zone database
       (e.g. `tzdata`); the default `"Etc/UTC"` needs none.
+
+      In zones that change offset at midnight (Cuba, Chile, Lord Howe…)
+      local midnight can be missing or happen twice a year. Where it is
+      **missing**, the day starts at the first instant after the jump —
+      01:00 local for a one-hour spring forward, and the day is 23 h long.
+      Where it happens **twice**, the day starts at the first of the two,
+      before the clocks go back, and is 25 h long. Days therefore always
+      tile the year: no instant belongs to two civil days, and none to
+      neither.
     * `:twilight` — altitude used for dawn/dusk: `:civil` (default),
       `:nautical`, `:astronomical`, or degrees.
     * `:boundaries` — constellation convention: `:equal_sidereal`
       (default) or `:iau` (see `constellation_of/3`).
-    * `:events` — `false` skips the four geocentric event searches
-      (default `true`). `Day` `:events` becomes `nil`, and so do
-      `moon.phase_instant`, `moon.apsis`, `moon.node` and
-      `moon.standstill`. Worth it only for bulk work that reads the Sun
-      and nothing else.
     * `:delta_t` — override ΔT in seconds (see `GreenCal.Astro.Time`).
 
   ## A warning about the interpretive layer
@@ -197,7 +201,7 @@ defmodule GreenCal do
         # per family. The node crossing (~2 days per month) is the one
         # biodynamic calendars mark: they treat the surrounding hours as
         # unfavorable.
-        phase_instant: geo.phase,
+        phase_change: geo.phase,
         apsis: geo.apsis,
         node: geo.node,
         standstill: geo.standstill,
@@ -213,7 +217,7 @@ defmodule GreenCal do
       organ: Map.fetch!(@element_to_organ, element)
     }
 
-    %{day | events: if(events?(opts), do: project_events(day))}
+    %{day | events: project_events(day)}
   end
 
   @doc """
@@ -431,8 +435,10 @@ defmodule GreenCal do
     end
   end
 
-  # DST transitions can skip or repeat midnight in some zones (Cuba, Chile…):
-  # take the first valid instant of the civil day.
+  # DST transitions can skip or repeat midnight in some zones (Cuba,
+  # Chile…): take the first valid instant of the civil day. Documented in
+  # the `:time_zone` option — what this picks decides which 24 h window is
+  # "the day", so it belongs in the contract, not just here.
   defp local_midnight(date, tz) do
     case DateTime.new(date, ~T[00:00:00], tz) do
       {:ok, dt} -> dt
@@ -450,8 +456,6 @@ defmodule GreenCal do
   defp tz_error(tz, reason), do: "cannot resolve time zone #{inspect(tz)}: #{inspect(reason)}"
 
   # ── Geocentric events ──────────────────────────────────────────────────
-
-  defp events?(opts), do: Keyword.get(opts, :events, true)
 
   # The four families, in the order they take in a chronology on the (very
   # rare) instant two of them share. Each is an independent search over the
@@ -485,21 +489,21 @@ defmodule GreenCal do
   # At most one event per family within a civil day: the shortest of these
   # cycles is 7.4 days (successive principal phases). Keeping the first is
   # therefore keeping the only one.
+  #
+  # Always run, never behind an option: a `nil` here has to mean "no such
+  # event today" and nothing else, or every reader of `moon.node` has to
+  # know how the day was built before trusting it.
   defp geocentric_of_day(jd0, jd1, tz, opts) do
-    if events?(opts) do
-      jd0
-      |> geocentric_events(jd1, opts, false)
-      |> Enum.reduce(@no_geocentric, fn event, acc ->
-        {family, event} = Map.pop!(event, :family)
+    jd0
+    |> geocentric_events(jd1, opts, false)
+    |> Enum.reduce(@no_geocentric, fn event, acc ->
+      {family, event} = Map.pop!(event, :family)
 
-        case Map.fetch!(acc, family) do
-          nil -> Map.put(acc, family, stamp_event(event, tz))
-          _already_seen -> acc
-        end
-      end)
-    else
-      @no_geocentric
-    end
+      case Map.fetch!(acc, family) do
+        nil -> Map.put(acc, family, stamp_event(event, tz))
+        _already_seen -> acc
+      end
+    end)
   end
 
   # `:events` is built by reading the finished struct back, so a field and
@@ -518,7 +522,7 @@ defmodule GreenCal do
         {:moon, :set, moon.set}
       ] ++
         for {family, event} <- [
-              {:phase, moon.phase_instant},
+              {:phase, moon.phase_change},
               {:apsis, moon.apsis},
               {:node, moon.node},
               {:standstill, moon.standstill}

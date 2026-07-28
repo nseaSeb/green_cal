@@ -11,7 +11,7 @@ defmodule GreenCal.Day do
   The day holds two kinds of value, and they are not sampled the same way.
 
   **Instants** — `sun.rise`, `twilight.dawn`, `moon.set`, `moon.node.at`,
-  `moon.phase_instant.at` … — are exact: each is searched for within the
+  `moon.phase_change.at` … — are exact: each is searched for within the
   civil day and reported to the second.
 
   **Scalars** are a snapshot taken at `sampled_at`, the middle of the civil
@@ -45,8 +45,8 @@ defmodule GreenCal.Day do
       sunrise, the distance of a perigee, the declination of a standstill
       live in the structured field, which is made for them.
     * **Same time zone** as the rest of the struct.
-    * `nil` when the `events: false` option was given, as opposed to `[]`
-      for a day where nothing happens.
+    * Always present. There is no option to skip it, so `[]` means the day
+      holds nothing, never "not computed".
 
   ### An absent event is not a non-event
 
@@ -128,23 +128,28 @@ defmodule GreenCal.Day do
     Lunar part of a `GreenCal.Day`.
 
     Four fields carry a geocentric event instant when the day holds one,
-    and `nil` otherwise: `:phase_instant`, `:apsis`, `:node` and
+    and `nil` otherwise: `:phase_change`, `:apsis`, `:node` and
     `:standstill`. They are the canonical home of those instants — the
     matching `GreenCal.Day` `:events` entries are a view of them, and
     `GreenCal.lunar_events/2` is the same computation over a whole range.
     All three come from the same finders in `GreenCal.Astro`, so they
     cannot report different times.
 
+    They are always computed, so `nil` states a fact about the sky — this
+    day holds no such event — and never a fact about how the day was
+    built.
+
     At most one of each per day: the shortest of these cycles is 7.4 days
     (successive principal phases), the longest 13.8 (apsides).
 
-    Note `:phase` and `:phase_instant` answer different questions.
-    `:phase` names the day — the eight-sector name at `sampled_at`, so a
-    day is `:full_moon` for the whole 24 h around the exact instant.
-    `:phase_instant` is that exact instant, and only on the day it falls.
+    Note `:phase` and `:phase_change` answer different questions. `:phase`
+    names the day — the eight-sector name at `sampled_at`, so a day reads
+    `:full_moon` for the whole 24 h around the exact instant.
+    `:phase_change` is the instant the Moon crosses into a new principal
+    phase, present only on the day it falls.
 
-        day.moon.phase          #=> :full_moon
-        day.moon.phase_instant  #=> %{type: :full_moon, at: ~U[...], eclipse: :none}
+        day.moon.phase         #=> :full_moon
+        day.moon.phase_change  #=> %{type: :full_moon, at: ~U[...], eclipse: :none}
     """
 
     defstruct [
@@ -158,7 +163,7 @@ defmodule GreenCal.Day do
       :distance_km,
       :declination,
       :ecliptic_latitude,
-      :phase_instant,
+      :phase_change,
       :apsis,
       :node,
       :standstill,
@@ -192,7 +197,7 @@ defmodule GreenCal.Day do
             distance_km: float(),
             declination: float(),
             ecliptic_latitude: float(),
-            phase_instant:
+            phase_change:
               %{
                 type: :new_moon | :first_quarter | :full_moon | :last_quarter,
                 at: DateTime.t(),
@@ -243,6 +248,6 @@ defmodule GreenCal.Day do
           constellation: String.t(),
           element: :fire | :earth | :air | :water,
           organ: :fruit | :root | :flower | :leaf,
-          events: [event()] | nil
+          events: [event()]
         }
 end

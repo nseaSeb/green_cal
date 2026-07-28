@@ -96,12 +96,12 @@ defmodule GreenCal.TimeZoneTest do
       # The new moon of 2026-08-12 is at 17:36:40 UTC, i.e. 19:36:40 local
       day = GreenCal.day(@paris, ~D[2026-08-12], time_zone: "Test/Paris")
 
-      assert day.moon.phase_instant.type == :new_moon
-      assert day.moon.phase_instant.at.time_zone == "Test/Paris"
-      assert DateTime.to_time(day.moon.phase_instant.at) == ~T[19:36:40]
+      assert day.moon.phase_change.type == :new_moon
+      assert day.moon.phase_change.at.time_zone == "Test/Paris"
+      assert DateTime.to_time(day.moon.phase_change.at) == ~T[19:36:40]
 
       phase = Enum.find(day.events, &(&1.family == :phase))
-      assert phase.at == day.moon.phase_instant.at
+      assert phase.at == day.moon.phase_change.at
     end
 
     test "the day runs local midnight to local midnight, so sampled_at is local noon" do
@@ -160,6 +160,43 @@ defmodule GreenCal.TimeZoneTest do
         assert day.events != []
         times = Enum.map(day.events, & &1.at)
         assert times == Enum.sort(times, DateTime)
+      end
+    end
+
+    test "the documented choice when local midnight is missing or doubled" do
+      # This is the contract, not an implementation detail: which 24 h
+      # window counts as "the day" decides which events fall in it.
+      #
+      # Missing midnight (spring): the day starts at the first instant
+      # after the jump — 01:00 local — and runs 23 h.
+      spring = GreenCal.day(@paris, ~D[2026-03-29], time_zone: "Test/Midnight")
+      assert DateTime.to_time(spring.sampled_at) == ~T[12:30:00]
+
+      # Doubled midnight (autumn): the day starts at the first of the two,
+      # before the clocks go back, and runs 25 h. Picking the second one
+      # would give a 24 h window and a midpoint at 12:00 — the 11:30 here
+      # is what says which midnight was taken.
+      autumn = GreenCal.day(@paris, ~D[2026-10-25], time_zone: "Test/Midnight")
+      assert DateTime.to_time(autumn.sampled_at) == ~T[11:30:00]
+    end
+
+    test "civil days tile: consecutive midpoints sit half a window apart" do
+      # Days tile iff each one's window ends where the next one's begins.
+      # Midpoints then sit (w_a + w_b) / 2 apart — so both gaps flanking a
+      # 23 h day are 23.5 h, and both flanking a 25 h day are 24.5 h. A
+      # skipped or double-counted hour breaks one of the two.
+      for {range, hours} <- [
+            {Date.range(~D[2026-03-28], ~D[2026-03-30]), 23.5},
+            {Date.range(~D[2026-10-24], ~D[2026-10-26]), 24.5}
+          ] do
+        gaps =
+          @paris
+          |> GreenCal.calendar(range, time_zone: "Test/Midnight")
+          |> Enum.map(& &1.sampled_at)
+          |> Enum.chunk_every(2, 1, :discard)
+          |> Enum.map(fn [a, b] -> DateTime.diff(b, a) end)
+
+        assert gaps == [round(hours * 3600), round(hours * 3600)]
       end
     end
 

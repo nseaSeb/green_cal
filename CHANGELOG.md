@@ -30,11 +30,17 @@ produced, 0.2.0 produces identically.
   non-event: `:state` still says whether the Sun failed to rise or failed
   to set.
 
-- **`GreenCal.Day.Moon` `:phase_instant`, `:apsis`, `:standstill`** — the
+- **`GreenCal.Day.Moon` `:phase_change`, `:apsis`, `:standstill`** — the
   canonical home of those instants, next to `:node`, which already had
   one. Each is `%{type:, at:, …}` or `nil`, and carries its family's extra
   data (`:eclipse`, `:distance_km`, `:declination`) so that `:events` can
-  stay uniform.
+  stay uniform. All four are always computed, so `nil` says something
+  about the sky and never about how the day was requested.
+
+  `:phase_change` rather than `:phase_instant`: next to `:phase`, which
+  names the day at `sampled_at` (`:waxing_gibbous`), "phase instant" reads
+  as "the instant of the phase", which is not what it is. It is the
+  instant the Moon crosses into a new principal phase.
 
 - **`GreenCal.Day` `:sampled_at`** — the instant every scalar of the day
   is evaluated at: the middle of the civil day, local noon under a
@@ -59,8 +65,14 @@ produced, 0.2.0 produces identically.
   schedulers); the ceiling is the slowest single family, so this is close
   to all there is to get.
 
-- **`:events` option** (default `true`) — `events: false` skips the four
-  geocentric searches for code that reads the Sun and nothing else.
+- **The `:time_zone` contract for zones that switch at midnight** (Cuba,
+  Chile, Lord Howe…). Where local midnight does not exist, the civil day
+  starts at the first instant after the jump and runs 23 h; where it
+  happens twice, it starts at the first of the two and runs 25 h. Days
+  therefore tile the year: no instant belongs to two of them, and none to
+  neither. 0.1.1 already behaved this way — it was a code comment, and
+  which 24 h window counts as "the day" decides which events fall in it,
+  so it belongs in the contract.
 
 ### Changed
 
@@ -95,12 +107,22 @@ produced, 0.2.0 produces identically.
   few milliseconds under a `:time_zone`, where a DST day is 23 or 25 hours
   long and the sampling grids stop lining up.
 
-### Behaviour change
+### Considered and rejected
 
-- **`day.moon.node` is `nil` under `events: false`.** In 0.1.1 the node
-  search ran unconditionally. The option now means one thing — compute no
-  geocentric instant at all — rather than nearly that. The default is
-  `true`, so nothing changes unless you opt out explicitly.
+- **An `events: false` option** to skip the four geocentric searches. It
+  was implemented, then removed before release. Skipping them makes
+  `moon.node` and its three new neighbours `nil` for two different
+  reasons — no such event today, or not computed — with nothing to tell
+  them apart. That is exactly the ambiguity the `:events` contract closes
+  for the list, reopened on the fields the list projects, and the
+  consumer most likely to pass the option is the one processing volume,
+  who would read a configuration artefact as an astronomical fact. At the
+  measured cost (+0.3 ms on a quiet day) it did not buy enough to be
+  worth a permanently ambiguous struct.
+
+  For many places at once, the answer is not to skip the searches but to
+  do them once: the geocentric instants are identical everywhere, so
+  `lunar_timeline/2` covers a whole region in one call.
 
 ## [0.1.1] - 2026-07-28
 

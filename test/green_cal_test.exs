@@ -442,7 +442,7 @@ defmodule GreenCalTest do
 
       geocentric =
         for {family, event} <- [
-              {:phase, day.moon.phase_instant},
+              {:phase, day.moon.phase_change},
               {:apsis, day.moon.apsis},
               {:node, day.moon.node},
               {:standstill, day.moon.standstill}
@@ -507,28 +507,25 @@ defmodule GreenCalTest do
       end
     end
 
-    test "events: false nils the list and the four geocentric fields" do
-      # 2026-08-12 carries a new moon, so the fields are non-nil by default.
-      full = GreenCal.day(@paris, ~D[2026-08-12])
-      assert full.moon.phase_instant.type == :new_moon
+    test "a nil geocentric field means the sky, never the configuration" do
+      # There is no option to skip these searches, so the only reading of
+      # nil is "no such event today" — the ambiguity the :events contract
+      # closes for the list must not reopen on the fields it projects.
+      busy = GreenCal.day(@paris, ~D[2026-08-12])
+      assert busy.moon.phase_change.type == :new_moon
 
-      bare = GreenCal.day(@paris, ~D[2026-08-12], events: false)
-      assert bare.events == nil
-      assert bare.moon.phase_instant == nil
-      assert bare.moon.apsis == nil
-      assert bare.moon.node == nil
-      assert bare.moon.standstill == nil
+      quiet = GreenCal.day(@paris, ~D[2026-08-03])
+      assert quiet.moon.phase_change == nil
 
-      # Everything else is untouched
-      assert bare.sun == full.sun
-      assert bare.twilight == full.twilight
-      assert bare.moon.illuminated_fraction == full.moon.illuminated_fraction
+      # No option turns them off, whatever a caller passes
+      assert GreenCal.day(@paris, ~D[2026-08-12], events: false) == busy
+      assert is_list(GreenCal.day(@paris, ~D[2026-08-12], events: false).events)
     end
 
     test "a quiet day still gets a list, not nil" do
       # No geocentric event, but sun and moon still rise and set
       day = GreenCal.day(@paris, ~D[2026-08-03])
-      assert day.moon.phase_instant == nil
+      assert day.moon.phase_change == nil
       assert day.moon.node == nil
       assert day.events != []
       assert Enum.all?(day.events, &(&1.family in [:sun, :twilight, :moon]))
@@ -651,7 +648,7 @@ defmodule GreenCalTest do
 
         field =
           case e.family do
-            :phase -> day.moon.phase_instant
+            :phase -> day.moon.phase_change
             :apsis -> day.moon.apsis
             :node -> day.moon.node
             :standstill -> day.moon.standstill
