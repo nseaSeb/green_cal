@@ -12,8 +12,9 @@ defmodule GreenCal.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
-        "Agricultural sun & moon calendar: rise/set, twilights, lunar phases and " <>
-          "biodynamic cycles from Meeus' algorithms. Pure Elixir, zero dependencies.",
+        "Sun and moon ephemerides for agricultural calendars: rise/set, twilights, " <>
+          "lunar phases, node crossings and the declination cycle biodynamic sowing " <>
+          "calendars are built on. Meeus' algorithms, pure Elixir, zero dependencies.",
       package: package(),
       docs: docs(),
       name: "GreenCal",
