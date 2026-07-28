@@ -6,6 +6,100 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-28
+
+Ergonomics, from feedback after consuming 0.1.1 in a real application. No
+change to any computed quantity: every instant and every number 0.1.1
+produced, 0.2.0 produces identically.
+
+### Added
+
+- **`GreenCal.Day` `:events`** — the day as one chronology. Everything
+  that happens at an instant, sorted, in a single uniform shape
+  `%{family:, type:, at:}`: sun and moon rise/transit/set, dawn and dusk,
+  and the geocentric instants below. Displaying "what happens today" no
+  longer means flattening four lists, tagging them, grouping them by local
+  date, merging them with rise/set and sorting the result.
+
+  It is a **projection of the struct**, not a second computation: it is
+  built by reading the finished struct back, so a field and its entry in
+  the list are the same value by construction. Seven families, split
+  between topocentric (`:sun`, `:twilight`, `:moon` — they depend on where
+  you stand) and geocentric (`:phase`, `:apsis`, `:node`, `:standstill` —
+  the same instants everywhere on Earth). An absent entry is not a
+  non-event: `:state` still says whether the Sun failed to rise or failed
+  to set.
+
+- **`GreenCal.Day.Moon` `:phase_instant`, `:apsis`, `:standstill`** — the
+  canonical home of those instants, next to `:node`, which already had
+  one. Each is `%{type:, at:, …}` or `nil`, and carries its family's extra
+  data (`:eclipse`, `:distance_km`, `:declination`) so that `:events` can
+  stay uniform.
+
+- **`GreenCal.Day` `:sampled_at`** — the instant every scalar of the day
+  is evaluated at: the middle of the civil day, local noon under a
+  `:time_zone`. This was true in 0.1.1 and only discoverable by reading
+  the source. `illuminated_fraction` shown at 23:00 is the value it had at
+  noon; the moduledoc now says so, and lists every field concerned —
+  `phase`, `elongation`, `distance_km`, `declination`,
+  `ecliptic_latitude`, the three `*_trend` fields, `constellation`,
+  `element` and `organ`.
+
+- **`GreenCal.lunar_timeline/2`** — the four geocentric families as one
+  chronological list, each entry tagged with its `:family`. Previously
+  `lunar_events/2` returned four lists with heterogeneous keys and no
+  discriminant, so merging them meant labelling them yourself.
+
+- **`:parallel` on `lunar_timeline/2` and `lunar_events/2`**, matching
+  `calendar/3`. The four families are independent searches over the same
+  range, so they are what gets parallelized — not the range. The result is
+  therefore identical to the sequential one down to the last bit, with no
+  reasoning needed about events landing on a sub-range boundary. Roughly
+  halves the wall clock over a year (measured 186 ms → 88 ms, 8
+  schedulers); the ceiling is the slowest single family, so this is close
+  to all there is to get.
+
+- **`:events` option** (default `true`) — `events: false` skips the four
+  geocentric searches for code that reads the Sun and nothing else.
+
+### Changed
+
+- **`lunar_events/2` is now a view over `lunar_timeline/2`**, grouped by
+  family, and its events carry the new `:family` key. Same four keys,
+  same order, same instants. This is the structural fix for the two paths
+  to a node crossing that 0.1.1 had: `day.moon.node` and
+  `lunar_events(…).nodes` were verified identical, but nothing prevented
+  them drifting. They now come from one list.
+
+- `GreenCal.day/3` runs three geocentric searches it did not run before.
+  0.1.1 already ran the fourth for `moon.node`, but that one is by far the
+  cheapest: 0.05 ms of the 0.93 ms the four now cost together. Measured on
+  one day at Paris, `day/3` goes from 2.8 ms to 3.6 ms — about +30%, not
+  the doubling a per-day event search might suggest, which is why the
+  default is `true` and the escape hatch is an option rather than the
+  other way round.
+
+- `lunar_timeline/2` and `lunar_events/2` raise `ArgumentError` on a
+  descending `Date.Range` instead of quietly returning nothing. 0.1.1
+  handed the finders a backwards window, which they sampled the wrong way
+  round.
+
+- `calendar/3` is documented as computing each day exactly as `day/3`
+  would, so the two agree bit for bit in every time zone. Sharing one
+  geocentric search across the range was implemented and then dropped: it
+  measured within noise of the per-day searches — the cost sits in the
+  bisections, whose number depends on how many events exist, not on how
+  the range is cut — and it made `calendar/3` disagree with `day/3` by a
+  few milliseconds under a `:time_zone`, where a DST day is 23 or 25 hours
+  long and the sampling grids stop lining up.
+
+### Behaviour change
+
+- **`day.moon.node` is `nil` under `events: false`.** In 0.1.1 the node
+  search ran unconditionally. The option now means one thing — compute no
+  geocentric instant at all — rather than nearly that. The default is
+  `true`, so nothing changes unless you opt out explicitly.
+
 ## [0.1.1] - 2026-07-28
 
 ### Changed
@@ -79,6 +173,7 @@ First release.
 - Property tests and physical invariants (bounded distance and latitude,
   event ordering, chained daily windows equal to one continuous search).
 
-[Unreleased]: https://github.com/nseaSeb/green_cal/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/nseaSeb/green_cal/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nseaSeb/green_cal/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/nseaSeb/green_cal/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nseaSeb/green_cal/releases/tag/v0.1.0

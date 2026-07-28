@@ -25,6 +25,15 @@ defmodule GreenCal do
 
       GreenCal.calendar({48.8566, 2.3522}, Date.range(~D[2026-07-01], ~D[2026-07-31]))
 
+  Everything the day holds that happens *at an instant* is also available
+  as one sorted list — sunrise and moonset next to the exact full moon:
+
+      for e <- day.events, do: {e.family, e.type, e.at}
+
+  See `GreenCal.Day` for the shape and guarantees of that list, and
+  `lunar_timeline/2` for the same idea over a whole range without a
+  location.
+
   ## Options
 
   Accepted by `day/3` and `calendar/3`:
@@ -43,6 +52,11 @@ defmodule GreenCal do
       `:nautical`, `:astronomical`, or degrees.
     * `:boundaries` — constellation convention: `:equal_sidereal`
       (default) or `:iau` (see `constellation_of/3`).
+    * `:events` — `false` skips the four geocentric event searches
+      (default `true`). `Day` `:events` becomes `nil`, and so do
+      `moon.phase_instant`, `moon.apsis`, `moon.node` and
+      `moon.standstill`. Worth it only for bulk work that reads the Sun
+      and nothing else.
     * `:delta_t` — override ΔT in seconds (see `GreenCal.Astro.Time`).
 
   ## A warning about the interpretive layer
@@ -147,9 +161,12 @@ defmodule GreenCal do
     twilight_sel = select_events(twilight_result)
     moon_sel = select_events(moon_result)
 
-    %GreenCal.Day{
+    geo = geocentric_of_day(jd0, jd1, tz, opts)
+
+    day = %GreenCal.Day{
       date: date,
       location: loc,
+      sampled_at: noon_jd |> Time.to_datetime() |> shift(tz),
       sun: %GreenCal.Day.Sun{
         state: sun_result.state,
         rise: stamp(sun_sel.rise, tz),
@@ -176,9 +193,14 @@ defmodule GreenCal do
         distance_km: moon_now.distance_km,
         declination: moon_now.declination,
         ecliptic_latitude: moon_now.latitude,
-        # Node crossing within the civil day, if any (~2 days per month).
-        # Biodynamic calendars treat the surrounding hours as unfavorable.
-        node: node_crossing(jd0, jd1, tz, opts),
+        # The geocentric instants falling within the civil day, at most one
+        # per family. The node crossing (~2 days per month) is the one
+        # biodynamic calendars mark: they treat the surrounding hours as
+        # unfavorable.
+        phase_instant: geo.phase,
+        apsis: geo.apsis,
+        node: geo.node,
+        standstill: geo.standstill,
         # The three independent cycles — conflating the first two is the
         # single most common mistake in lunar-calendar implementations.
         trend: trend(moon_before.declination, moon_after.declination, :ascending, :descending),
@@ -190,54 +212,122 @@ defmodule GreenCal do
       element: element,
       organ: Map.fetch!(@element_to_organ, element)
     }
+
+    %{day | events: if(events?(opts), do: project_events(day))}
   end
 
   @doc """
   One `GreenCal.Day` per date of the range (or any enumerable of dates).
 
-  Days are independent computations (~1.8 ms each): pass `parallel: true`
-  to spread them over the schedulers with `Task.async_stream/3` — a full
-  year drops from ~630 ms to ~160 ms on a typical machine. Order is
-  preserved either way, and exceptions stay rescuable in both modes.
+  Days are independent computations: pass `parallel: true` to spread them
+  over the schedulers with `Task.async_stream/3`. Order is preserved either
+  way, and exceptions stay rescuable in both modes.
 
       GreenCal.calendar(loc, Date.range(~D[2026-07-01], ~D[2026-07-31]))
       GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), parallel: true)
+
+  Every day is computed exactly as `day/3` would compute it alone, so the
+  two functions agree bit for bit. Sharing one geocentric search across the
+  range was tried and dropped: it measured within noise of the per-day
+  searches (the cost sits in the bisections, whose count depends on how
+  many events exist, not on how the range is cut), and it made
+  `calendar/3` disagree with `day/3` by a few milliseconds under a
+  `:time_zone`, where a DST day is 23 or 25 hours long and the sampling
+  grids stop lining up.
   """
   @spec calendar(location(), Enumerable.t(), keyword()) :: [GreenCal.Day.t()]
   def calendar(loc, dates, opts \\ []) do
     validate_location!(loc)
     {parallel, opts} = Keyword.pop(opts, :parallel, false)
 
-    if parallel do
-      # Exceptions inside linked tasks would kill the caller as an exit
-      # signal; capture and re-raise them here so both branches fail the
-      # same way (a rescuable exception).
-      dates
-      |> Task.async_stream(
-        fn date ->
-          try do
-            {:ok, day(loc, date, opts)}
-          rescue
-            e -> {:raise, e, __STACKTRACE__}
-          end
-        end,
-        ordered: true,
-        timeout: :infinity
-      )
-      |> Enum.map(fn
-        {:ok, {:ok, day}} -> day
-        {:ok, {:raise, e, stacktrace}} -> reraise e, stacktrace
-      end)
-    else
-      Enum.map(dates, &day(loc, &1, opts))
-    end
+    map_maybe_parallel(dates, parallel, &day(loc, &1, opts))
+  end
+
+  # Exceptions inside linked tasks would kill the caller as an exit signal;
+  # capture and re-raise them here so both branches fail the same way (a
+  # rescuable exception).
+  defp map_maybe_parallel(items, false, fun), do: Enum.map(items, fun)
+
+  defp map_maybe_parallel(items, true, fun) do
+    items
+    |> Task.async_stream(
+      fn item ->
+        try do
+          {:ok, fun.(item)}
+        rescue
+          e -> {:raise, e, __STACKTRACE__}
+        end
+      end,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.map(fn
+      {:ok, {:ok, value}} -> value
+      {:ok, {:raise, e, stacktrace}} -> reraise e, stacktrace
+    end)
   end
 
   @doc """
-  Geocentric lunar events over a date range — no location involved.
+  Geocentric lunar events over a date range, as one chronology.
 
-  Everything a printed lunar calendar marks with a symbol, as exact
-  instants:
+  No location involved: these instants are the same everywhere on Earth.
+  Everything a printed lunar calendar marks with a symbol, in the order it
+  happens, each entry tagged with its `:family`:
+
+      GreenCal.lunar_timeline(Date.range(~D[2026-08-01], ~D[2026-08-31]))
+      #=> [%{family: :phase, type: :last_quarter, at: ~U[2026-08-06 02:21:49Z],
+      #      eclipse: :none},
+      #    %{family: :standstill, type: :northernmost,
+      #      at: ~U[2026-08-08 23:38:08Z], declination: 28.107933344152},
+      #    %{family: :apsis, type: :perigee, at: ~U[2026-08-10 11:16:35Z],
+      #      distance_km: 363285.244284283},
+      #    %{family: :phase, type: :new_moon, at: ~U[2026-08-12 17:36:40Z],
+      #      eclipse: :likely},
+      #    ...]
+
+  | Family | Types | Extra keys |
+  |---|---|---|
+  | `:phase` | `:new_moon`, `:first_quarter`, `:full_moon`, `:last_quarter` | `:eclipse` (see `GreenCal.Astro.phase_events/3`) |
+  | `:apsis` | `:perigee`, `:apogee` | `:distance_km` |
+  | `:node` | `:ascending`, `:descending` | — |
+  | `:standstill` | `:northernmost`, `:southernmost` | `:declination` |
+
+  Unlike `GreenCal.Day` `:events`, entries here carry their family's extra
+  keys: there is no struct behind this list to hold them.
+
+  The four families are independent searches over the same range, so
+  `parallel: true` runs them on separate schedulers. The result is
+  identical either way, down to the last bit — same range, same sampling
+  grid, same bisection.
+
+  Times are UTC `DateTime`s, or local ones with the `:time_zone` option.
+  """
+  @spec lunar_timeline(Date.Range.t(), keyword()) :: [map()]
+  def lunar_timeline(%Date.Range{first: first, last: last} = range, opts \\ []) do
+    # A descending range would hand the finders a backwards window, which
+    # they would sample the wrong way round and quietly report as empty.
+    if Date.compare(first, last) == :gt do
+      raise ArgumentError,
+            "lunar_timeline/2 and lunar_events/2 need an ascending date range, " <>
+              "got: #{inspect(range)}"
+    end
+
+    {parallel, opts} = Keyword.pop(opts, :parallel, false)
+
+    # Same civil-day windows as calendar/3: with a :time_zone the range
+    # runs from the first date's local midnight to the day after the last
+    # date's local midnight, so both functions agree on what "August" is.
+    {jd0, _, tz} = civil_day_window(first, opts)
+    {_, jd1, _} = civil_day_window(last, opts)
+
+    jd0
+    |> geocentric_events(jd1, opts, parallel)
+    |> Enum.map(&stamp_event(&1, tz))
+  end
+
+  @doc """
+  `lunar_timeline/2` grouped by family — the four lists a printed lunar
+  calendar keeps apart.
 
     * `:phases` — new moon, quarters, full moon, with the `:eclipse`
       screening flag (see `GreenCal.Astro.phase_events/3`)
@@ -246,10 +336,13 @@ defmodule GreenCal do
     * `:standstills` — northernmost / southernmost declination, i.e. the
       exact flips between ascending and descending Moon
 
-  Times are UTC `DateTime`s, or local ones with the `:time_zone` option.
+  This is a view over `lunar_timeline/2`, not a second computation, so the
+  two cannot report different instants. Each list is chronological; reach
+  for `lunar_timeline/2` when you want the families interleaved instead.
 
       GreenCal.lunar_events(Date.range(~D[2026-08-01], ~D[2026-08-31]))
-      #=> %{phases: [%{type: :new_moon, at: ~U[2026-08-12 17:36:40Z], eclipse: :likely}, ...],
+      #=> %{phases: [%{family: :phase, type: :new_moon,
+      #                at: ~U[2026-08-12 17:36:40Z], eclipse: :likely}, ...],
       #     apsides: [...], nodes: [...], standstills: [...]}
   """
   @spec lunar_events(Date.Range.t(), keyword()) :: %{
@@ -258,26 +351,17 @@ defmodule GreenCal do
           nodes: [map()],
           standstills: [map()]
         }
-  def lunar_events(%Date.Range{first: first, last: last}, opts \\ []) do
-    # Same civil-day windows as calendar/3: with a :time_zone the range
-    # runs from the first date's local midnight to the day after the last
-    # date's local midnight, so both functions agree on what "August" is.
-    {jd0, _, tz} = civil_day_window(first, opts)
-    {_, jd1, _} = civil_day_window(last, opts)
-
-    stamp = fn events ->
-      Enum.map(events, fn %{jd: jd} = e ->
-        e |> Map.delete(:jd) |> Map.put(:at, jd |> Time.to_datetime() |> shift(tz))
-      end)
-    end
-
-    %{
-      phases: stamp.(Astro.phase_events(jd0, jd1, opts)),
-      apsides: stamp.(Astro.apsis_events(jd0, jd1, opts)),
-      nodes: stamp.(Astro.node_crossings(jd0, jd1, opts)),
-      standstills: stamp.(Astro.declination_extrema(jd0, jd1, opts))
-    }
+  def lunar_events(%Date.Range{} = range, opts \\ []) do
+    range
+    |> lunar_timeline(opts)
+    |> Enum.group_by(&group_key(&1.family))
+    |> then(&Map.merge(%{phases: [], apsides: [], nodes: [], standstills: []}, &1))
   end
+
+  defp group_key(:phase), do: :phases
+  defp group_key(:apsis), do: :apsides
+  defp group_key(:node), do: :nodes
+  defp group_key(:standstill), do: :standstills
 
   @doc """
   Constellation occupied by a tropical ecliptic longitude.
@@ -365,11 +449,87 @@ defmodule GreenCal do
 
   defp tz_error(tz, reason), do: "cannot resolve time zone #{inspect(tz)}: #{inspect(reason)}"
 
-  defp node_crossing(jd0, jd1, tz, opts) do
-    case Astro.node_crossings(jd0, jd1, opts) do
-      [] -> nil
-      [%{type: type, jd: jd} | _] -> %{type: type, at: jd |> Time.to_datetime() |> shift(tz)}
+  # ── Geocentric events ──────────────────────────────────────────────────
+
+  defp events?(opts), do: Keyword.get(opts, :events, true)
+
+  # The four families, in the order they take in a chronology on the (very
+  # rare) instant two of them share. Each is an independent search over the
+  # same window: parallelizing *these* rather than the range is what makes
+  # `parallel: true` bit-for-bit identical to the sequential run, with no
+  # reasoning needed about events landing on a sub-range boundary.
+  #
+  # The result is flat and chronological, and still carries `:jd` —
+  # stamping into `DateTime`s happens at the edges, so nothing downstream
+  # has to work from times already rounded to the second.
+  defp geocentric_events(jd0, jd1, opts, parallel) do
+    [
+      {:phase, &Astro.phase_events/3},
+      {:apsis, &Astro.apsis_events/3},
+      {:node, &Astro.node_crossings/3},
+      {:standstill, &Astro.declination_extrema/3}
+    ]
+    |> map_maybe_parallel(parallel, fn {family, find} ->
+      jd0 |> find.(jd1, opts) |> Enum.map(&Map.put(&1, :family, family))
+    end)
+    |> Enum.concat()
+    |> Enum.sort_by(& &1.jd)
+  end
+
+  defp stamp_event(%{jd: jd} = event, tz) do
+    event |> Map.delete(:jd) |> Map.put(:at, jd |> Time.to_datetime() |> shift(tz))
+  end
+
+  @no_geocentric %{phase: nil, apsis: nil, node: nil, standstill: nil}
+
+  # At most one event per family within a civil day: the shortest of these
+  # cycles is 7.4 days (successive principal phases). Keeping the first is
+  # therefore keeping the only one.
+  defp geocentric_of_day(jd0, jd1, tz, opts) do
+    if events?(opts) do
+      jd0
+      |> geocentric_events(jd1, opts, false)
+      |> Enum.reduce(@no_geocentric, fn event, acc ->
+        {family, event} = Map.pop!(event, :family)
+
+        case Map.fetch!(acc, family) do
+          nil -> Map.put(acc, family, stamp_event(event, tz))
+          _already_seen -> acc
+        end
+      end)
+    else
+      @no_geocentric
     end
+  end
+
+  # `:events` is built by reading the finished struct back, so a field and
+  # its entry in the list are the same value by construction — they cannot
+  # drift apart the way two parallel computations of the same fact would.
+  defp project_events(%GreenCal.Day{sun: sun, twilight: twilight, moon: moon}) do
+    instants =
+      [
+        {:sun, :rise, sun.rise},
+        {:sun, :transit, sun.transit},
+        {:sun, :set, sun.set},
+        {:twilight, :dawn, twilight.dawn},
+        {:twilight, :dusk, twilight.dusk},
+        {:moon, :rise, moon.rise},
+        {:moon, :transit, moon.transit},
+        {:moon, :set, moon.set}
+      ] ++
+        for {family, event} <- [
+              {:phase, moon.phase_instant},
+              {:apsis, moon.apsis},
+              {:node, moon.node},
+              {:standstill, moon.standstill}
+            ],
+            do: {family, event && event.type, event && event.at}
+
+    for {family, type, at} <- instants, at != nil do
+      %{family: family, type: type, at: at}
+    end
+    # Stable, so families that share an instant keep the order above.
+    |> Enum.sort_by(& &1.at, DateTime)
   end
 
   # Picks the day's reported rise/set/transit from the raw event list.

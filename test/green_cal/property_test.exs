@@ -134,6 +134,114 @@ defmodule GreenCal.PropertyTest do
     end
   end
 
+  property "day events are exactly the struct's own instants, in order" do
+    check all(loc <- temperate_location(), date <- date_2000_2049(), max_runs: 25) do
+      day = GreenCal.day(loc, date)
+
+      from_struct =
+        [
+          {:sun, :rise, day.sun.rise},
+          {:sun, :transit, day.sun.transit},
+          {:sun, :set, day.sun.set},
+          {:twilight, :dawn, day.twilight.dawn},
+          {:twilight, :dusk, day.twilight.dusk},
+          {:moon, :rise, day.moon.rise},
+          {:moon, :transit, day.moon.transit},
+          {:moon, :set, day.moon.set}
+        ] ++
+          for {family, event} <- [
+                {:phase, day.moon.phase_instant},
+                {:apsis, day.moon.apsis},
+                {:node, day.moon.node},
+                {:standstill, day.moon.standstill}
+              ],
+              event != nil,
+              do: {family, event.type, event.at}
+
+      expected = for {f, t, at} <- from_struct, at != nil, do: {f, t, at}
+      actual = Enum.map(day.events, &{&1.family, &1.type, &1.at})
+
+      # Nothing dropped, nothing invented, nothing counted twice
+      assert Enum.sort(actual) == Enum.sort(expected)
+      assert length(actual) == length(expected)
+
+      # Uniform shape, and chronological
+      for e <- day.events, do: assert(Enum.sort(Map.keys(e)) == [:at, :family, :type])
+      times = Enum.map(day.events, & &1.at)
+      assert times == Enum.sort(times, DateTime)
+
+      # Every instant belongs to the day it is reported on: within the
+      # civil-day window, allowing the one-second rounding at its end.
+      for at <- times do
+        assert Date.diff(DateTime.to_date(at), date) in 0..1
+      end
+    end
+  end
+
+  property "calendar/3 returns exactly what day/3 returns, in every mode" do
+    check all(loc <- temperate_location(), date <- date_2000_2049(), max_runs: 10) do
+      range = Date.range(date, Date.add(date, 4))
+      one_by_one = Enum.map(range, &GreenCal.day(loc, &1))
+
+      assert GreenCal.calendar(loc, range) == one_by_one
+      assert GreenCal.calendar(loc, range, parallel: true) == one_by_one
+      # A plain list takes the same path as a range
+      assert GreenCal.calendar(loc, Enum.to_list(range)) == one_by_one
+    end
+  end
+
+  property "lunar_timeline/2 is the whole of lunar_events/2 and nothing else" do
+    check all(date <- date_2000_2049(), max_runs: 10) do
+      range = Date.range(date, Date.add(date, 45))
+
+      timeline = GreenCal.lunar_timeline(range)
+      grouped = GreenCal.lunar_events(range)
+
+      # The grouped view holds every event of the timeline, once. Compared
+      # as multisets: re-sorting by `:at` would be ambiguous on the rare
+      # pair of events sharing a second, and that ambiguity has nothing to
+      # do with what this property checks.
+      assert grouped |> Map.values() |> List.flatten() |> Enum.sort() == Enum.sort(timeline)
+
+      # Chronological, and parallel changes nothing at all
+      assert Enum.map(timeline, & &1.at) == Enum.sort(Enum.map(timeline, & &1.at), DateTime)
+      assert GreenCal.lunar_timeline(range, parallel: true) == timeline
+
+      # A 46-day window spans more than three synodic weeks: every family
+      # must show up, which is what makes the equality above meaningful.
+      assert timeline |> Enum.map(& &1.family) |> MapSet.new() ==
+               MapSet.new([:phase, :apsis, :node, :standstill])
+    end
+  end
+
+  property "each geocentric event is claimed by exactly one day of the range" do
+    check all(date <- date_2000_2049(), loc <- temperate_location(), max_runs: 10) do
+      range = Date.range(date, Date.add(date, 45))
+
+      # Identified by family and type as well as instant: two events of the
+      # same family and type cannot share a second, so a repeat here really
+      # is a day claiming an event twice.
+      from_days =
+        loc
+        |> GreenCal.calendar(range)
+        |> Enum.flat_map(fn day ->
+          for e <- day.events,
+              e.family in [:phase, :apsis, :node, :standstill],
+              do: {e.family, e.type, e.at}
+        end)
+
+      # Days partition the range: no event may be claimed twice
+      assert from_days == Enum.uniq(from_days)
+
+      # The per-day windows cover exactly the range-wide window, so the two
+      # searches must find the same events — none lost at a boundary.
+      timeline =
+        for e <- GreenCal.lunar_timeline(range), do: {e.family, e.type, e.at}
+
+      assert Enum.sort(from_days) == Enum.sort(timeline)
+    end
+  end
+
   test "chained daily windows lose no moon event and duplicate none" do
     # Consecutive civil-day windows share their midnight boundary sample.
     # Splitting a year into 365 independent searches must find exactly the

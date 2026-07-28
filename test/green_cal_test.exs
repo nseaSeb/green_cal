@@ -320,6 +320,44 @@ defmodule GreenCalTest do
       assert new.at == ~U[2026-08-12 17:36:40Z]
       assert new.eclipse == :likely
     end
+
+    test "lunar_timeline example block, in the order it is printed" do
+      timeline = GreenCal.lunar_timeline(Date.range(~D[2026-08-01], ~D[2026-08-31]))
+
+      assert [first, second, third, fourth | _] = timeline
+
+      assert first == %{
+               family: :phase,
+               type: :last_quarter,
+               at: ~U[2026-08-06 02:21:49Z],
+               eclipse: :none
+             }
+
+      assert second.family == :standstill
+      assert second.type == :northernmost
+      assert second.at == ~U[2026-08-08 23:38:08Z]
+      assert_in_delta second.declination, 28.107933344152, 1.0e-9
+
+      assert third.family == :apsis
+      assert third.type == :perigee
+      assert third.at == ~U[2026-08-10 11:16:35Z]
+      assert_in_delta third.distance_km, 363_285.244284283, 1.0e-6
+
+      assert fourth.family == :phase
+      assert fourth.type == :new_moon
+      assert fourth.at == ~U[2026-08-12 17:36:40Z]
+    end
+
+    test "README day.events line" do
+      day = GreenCal.day(@paris, ~D[2026-06-21], elevation: 35.0)
+
+      assert [{:twilight, :dawn, _}, {:sun, :rise, _} | rest] =
+               Enum.map(day.events, &{&1.family, &1.type, &1.at})
+
+      assert Enum.any?(rest, &match?({:moon, :transit, _}, &1))
+      assert Enum.any?(rest, &match?({:phase, :first_quarter, _}, &1))
+      assert Enum.any?(rest, &match?({:sun, :set, _}, &1))
+    end
   end
 
   describe "polar edge cases" do
@@ -383,6 +421,256 @@ defmodule GreenCalTest do
       for list <- Map.values(events), e <- list do
         assert %DateTime{} = e.at
         refute Map.has_key?(e, :jd)
+      end
+    end
+  end
+
+  describe "day events" do
+    # Rebuilt from the struct fields by hand, so the projection is checked
+    # against the struct rather than against itself.
+    defp canonical_instants(day) do
+      fixed = [
+        {:sun, :rise, day.sun.rise},
+        {:sun, :transit, day.sun.transit},
+        {:sun, :set, day.sun.set},
+        {:twilight, :dawn, day.twilight.dawn},
+        {:twilight, :dusk, day.twilight.dusk},
+        {:moon, :rise, day.moon.rise},
+        {:moon, :transit, day.moon.transit},
+        {:moon, :set, day.moon.set}
+      ]
+
+      geocentric =
+        for {family, event} <- [
+              {:phase, day.moon.phase_instant},
+              {:apsis, day.moon.apsis},
+              {:node, day.moon.node},
+              {:standstill, day.moon.standstill}
+            ],
+            event != nil,
+            do: {family, event.type, event.at}
+
+      for {family, type, at} <- fixed ++ geocentric, at != nil, do: {family, type, at}
+    end
+
+    defp as_tuples(events), do: Enum.map(events, &{&1.family, &1.type, &1.at})
+
+    test "the list is exactly the struct's instants, neither dropped nor invented" do
+      for date <- Date.range(~D[2026-08-01], ~D[2026-08-31]) do
+        day = GreenCal.day(@paris, date)
+        canonical = canonical_instants(day)
+
+        assert Enum.sort(as_tuples(day.events)) == Enum.sort(canonical),
+               "projection diverged from the struct on #{date}"
+
+        # No duplicates: same length, not just the same set
+        assert length(day.events) == length(canonical)
+      end
+    end
+
+    test "no geocentric field escapes the projection" do
+      # Catches a fifth event field being added to Day.Moon without being
+      # projected — as soon as it is non-nil on any day of the month.
+      for date <- Date.range(~D[2026-08-01], ~D[2026-08-31]) do
+        day = GreenCal.day(@paris, date)
+        families = day.events |> Enum.map(& &1.family) |> MapSet.new()
+
+        for {key, value} <- Map.from_struct(day.moon),
+            is_map(value) and Map.has_key?(value, :at) do
+          assert Enum.any?(families, &(&1 in [:phase, :apsis, :node, :standstill])),
+                 "#{key} holds an instant on #{date} but no geocentric family is in :events"
+        end
+      end
+    end
+
+    test "entries are uniform: three keys, no optional extras" do
+      # August holds all four geocentric families, so every shape is seen.
+      events =
+        Date.range(~D[2026-08-01], ~D[2026-08-31])
+        |> Enum.flat_map(&GreenCal.day(@paris, &1).events)
+
+      assert Enum.any?(events, &(&1.family == :phase))
+      assert Enum.any?(events, &(&1.family == :apsis))
+      assert Enum.any?(events, &(&1.family == :node))
+      assert Enum.any?(events, &(&1.family == :standstill))
+
+      for e <- events do
+        assert Enum.sort(Map.keys(e)) == [:at, :family, :type]
+        assert %DateTime{} = e.at
+      end
+    end
+
+    test "the list is chronological" do
+      for date <- Date.range(~D[2026-08-01], ~D[2026-08-31]) do
+        times = GreenCal.day(@paris, date).events |> Enum.map(& &1.at)
+        assert times == Enum.sort(times, DateTime)
+      end
+    end
+
+    test "events: false nils the list and the four geocentric fields" do
+      # 2026-08-12 carries a new moon, so the fields are non-nil by default.
+      full = GreenCal.day(@paris, ~D[2026-08-12])
+      assert full.moon.phase_instant.type == :new_moon
+
+      bare = GreenCal.day(@paris, ~D[2026-08-12], events: false)
+      assert bare.events == nil
+      assert bare.moon.phase_instant == nil
+      assert bare.moon.apsis == nil
+      assert bare.moon.node == nil
+      assert bare.moon.standstill == nil
+
+      # Everything else is untouched
+      assert bare.sun == full.sun
+      assert bare.twilight == full.twilight
+      assert bare.moon.illuminated_fraction == full.moon.illuminated_fraction
+    end
+
+    test "a quiet day still gets a list, not nil" do
+      # No geocentric event, but sun and moon still rise and set
+      day = GreenCal.day(@paris, ~D[2026-08-03])
+      assert day.moon.phase_instant == nil
+      assert day.moon.node == nil
+      assert day.events != []
+      assert Enum.all?(day.events, &(&1.family in [:sun, :twilight, :moon]))
+    end
+
+    test "sampled_at is the middle of the civil day" do
+      day = GreenCal.day(@paris, ~D[2026-08-12])
+      assert day.sampled_at == ~U[2026-08-12 12:00:00Z]
+    end
+
+    test "polar day: no sunrise entry, and state says why" do
+      day = GreenCal.day(@tromso, ~D[2026-06-21])
+      assert day.sun.state == :always_above
+      refute Enum.any?(day.events, &(&1.family == :sun and &1.type == :rise))
+      refute Enum.any?(day.events, &(&1.family == :sun and &1.type == :set))
+    end
+
+    test "polar night: same absence, opposite state" do
+      day = GreenCal.day(@tromso, ~D[2026-12-21])
+      assert day.sun.state == :always_below
+      refute Enum.any?(day.events, &(&1.family == :sun and &1.type == :rise))
+    end
+
+    test "calendar/3 gives each day exactly what day/3 gives it" do
+      range = Date.range(~D[2026-08-01], ~D[2026-08-31])
+      from_calendar = GreenCal.calendar(@paris, range)
+      one_by_one = for d <- range, do: GreenCal.day(@paris, d)
+
+      assert from_calendar == one_by_one
+    end
+
+    test "calendar/3 accepts any enumerable, including out of order and lazy" do
+      dates = [~D[2026-08-12], ~D[2026-08-28], ~D[2026-08-06]]
+
+      from_list = GreenCal.calendar(@paris, dates)
+      assert Enum.map(from_list, & &1.date) == dates
+      assert from_list == Enum.map(dates, &GreenCal.day(@paris, &1))
+
+      # A stream must be walked exactly once
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      stream =
+        Stream.map(dates, fn d ->
+          Agent.update(counter, &(&1 + 1))
+          d
+        end)
+
+      assert GreenCal.calendar(@paris, stream) == from_list
+      assert Agent.get(counter, & &1) == 3
+    end
+
+    test "a descending range still yields one day per date" do
+      descending = Date.range(~D[2026-08-03], ~D[2026-08-01], -1)
+      days = GreenCal.calendar(@paris, descending)
+
+      assert Enum.map(days, & &1.date) == [~D[2026-08-03], ~D[2026-08-02], ~D[2026-08-01]]
+      assert days == Enum.map(descending, &GreenCal.day(@paris, &1))
+    end
+
+    test "parallel: true changes nothing, events included" do
+      range = Date.range(~D[2026-08-01], ~D[2026-08-31])
+      assert GreenCal.calendar(@paris, range, parallel: true) == GreenCal.calendar(@paris, range)
+    end
+  end
+
+  describe "lunar_timeline/2" do
+    setup do
+      {:ok, timeline: GreenCal.lunar_timeline(Date.range(~D[2026-08-01], ~D[2026-08-31]))}
+    end
+
+    test "is chronological and tagged by family", %{timeline: timeline} do
+      assert timeline != []
+      assert Enum.map(timeline, & &1.at) == Enum.sort(Enum.map(timeline, & &1.at), DateTime)
+
+      assert timeline |> Enum.map(& &1.family) |> MapSet.new() ==
+               MapSet.new([:phase, :apsis, :node, :standstill])
+
+      for e <- timeline do
+        assert %DateTime{} = e.at
+        refute Map.has_key?(e, :jd)
+      end
+    end
+
+    test "carries each family's extra keys", %{timeline: timeline} do
+      by_family = Enum.group_by(timeline, & &1.family)
+
+      assert Enum.all?(by_family[:phase], &Map.has_key?(&1, :eclipse))
+      assert Enum.all?(by_family[:apsis], &Map.has_key?(&1, :distance_km))
+      assert Enum.all?(by_family[:standstill], &Map.has_key?(&1, :declination))
+      assert Enum.all?(by_family[:node], &(Map.keys(&1) |> Enum.sort() == [:at, :family, :type]))
+    end
+
+    test "lunar_events/2 is the same data, grouped", %{timeline: timeline} do
+      events = GreenCal.lunar_events(Date.range(~D[2026-08-01], ~D[2026-08-31]))
+
+      assert Map.keys(events) |> Enum.sort() == [:apsides, :nodes, :phases, :standstills]
+
+      regrouped =
+        Enum.group_by(timeline, fn
+          %{family: :phase} -> :phases
+          %{family: :apsis} -> :apsides
+          %{family: :node} -> :nodes
+          %{family: :standstill} -> :standstills
+        end)
+
+      assert events == regrouped
+    end
+
+    test "parallel: true is bit-identical, not merely equivalent", %{timeline: timeline} do
+      range = Date.range(~D[2026-08-01], ~D[2026-08-31])
+      assert GreenCal.lunar_timeline(range, parallel: true) == timeline
+      assert GreenCal.lunar_events(range, parallel: true) == GreenCal.lunar_events(range)
+    end
+
+    test "day/3 and the timeline agree on the instants they share", %{timeline: timeline} do
+      # Same finders, same windows: the day struct must report exactly the
+      # instant the range-wide timeline reports.
+      for e <- timeline do
+        day = GreenCal.day(@paris, DateTime.to_date(e.at))
+
+        field =
+          case e.family do
+            :phase -> day.moon.phase_instant
+            :apsis -> day.moon.apsis
+            :node -> day.moon.node
+            :standstill -> day.moon.standstill
+          end
+
+        assert field.type == e.type
+        assert field.at == e.at, "#{e.family} #{e.type} differs between day/3 and the timeline"
+      end
+    end
+
+    test "rejects a descending range instead of quietly returning nothing" do
+      descending = Date.range(~D[2026-08-31], ~D[2026-08-01], -1)
+
+      assert_raise ArgumentError, ~r/ascending date range/, fn ->
+        GreenCal.lunar_timeline(descending)
+      end
+
+      assert_raise ArgumentError, ~r/ascending date range/, fn ->
+        GreenCal.lunar_events(descending)
       end
     end
   end

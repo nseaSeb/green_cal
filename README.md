@@ -17,9 +17,13 @@ GreenCal computes:
   waxing/waning (illumination), **ascending/descending** (declination — the
   one biodynamic sowing calendars actually use), perigee/apogee (distance)
 - **Exact instants** of everything a printed calendar marks with a symbol
-  (`GreenCal.lunar_events/2`): phases (with an eclipse screening flag),
+  (`GreenCal.lunar_timeline/2`, or `GreenCal.lunar_events/2` for the same
+  data grouped by family): phases (with an eclipse screening flag),
   perigees/apogees, node crossings, and lunar standstills (the exact
   ascending → descending flips)
+- **The day as one chronology** — `day.events` lists everything that
+  happens, sorted, from dawn to the exact full moon, so "what happens
+  today" needs no assembling
 - The constellation the Moon stands in — equal-sector sidereal zodiac
   (Lahiri) by default, or the real unequal **IAU boundaries** (13
   constellations, Ophiuchus included) with `boundaries: :iau`, the
@@ -52,17 +56,34 @@ day.moon.illumination_trend #=> :waxing       (independent cycle!)
 day.constellation           #=> "Virgo"
 day.organ                   #=> :root
 
+# Everything that happens that day, in order — one uniform shape, no
+# optional keys, already sorted:
+for e <- day.events, do: {e.family, e.type, e.at}
+#=> [{:twilight, :dawn, ...}, {:sun, :rise, ...}, {:moon, :transit, ...},
+#    {:phase, :first_quarter, ...}, {:sun, :set, ...}, ...]
+
 # A whole month, with local times (needs a tz database, e.g. tzdata):
 GreenCal.calendar(loc, Date.range(~D[2026-07-01], ~D[2026-07-31]),
   time_zone: "Europe/Paris")
 
-# A year in ~160 ms:
+# Spread a year over the schedulers:
 GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), parallel: true)
 
+# Skip the four geocentric searches when you only read the Sun:
+GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), events: false)
+
 # Exact instants of phases, apsides, nodes and standstills (geocentric):
-GreenCal.lunar_events(Date.range(~D[2026-08-01], ~D[2026-08-31]))
-# phases: [%{type: :new_moon, at: ~U[2026-08-12 17:36:40Z], eclipse: :likely}, ...]
+GreenCal.lunar_timeline(Date.range(~D[2026-08-01], ~D[2026-08-31]))
+#=> [%{family: :phase, type: :last_quarter, at: ~U[2026-08-06 02:21:49Z],
+#      eclipse: :none}, ...]
 ```
+
+The seven event families split along a line worth knowing:
+`:sun`, `:twilight` and `:moon` are **topocentric** (they depend on where
+you stand), while `:phase`, `:apsis`, `:node` and `:standstill` are
+**geocentric** — the same instants everywhere on Earth. Computing several
+places at once, only the first three change: get the rest once from
+`GreenCal.lunar_timeline/2` instead of once per place.
 
 The low-level astronomy is public too — `GreenCal.Astro` (UT-facing facade),
 `GreenCal.Astro.Sun`, `GreenCal.Astro.Moon`, `GreenCal.Astro.RiseSet`,
@@ -112,7 +133,7 @@ labels the latter for what it is.
 ```elixir
 def deps do
   [
-    {:green_cal, "~> 0.1.1"}
+    {:green_cal, "~> 0.2.0"}
   ]
 end
 ```

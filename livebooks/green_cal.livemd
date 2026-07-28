@@ -43,6 +43,34 @@ not rise (it rises ~50 minutes later every day, and eventually skips a civil
 day). The `:state` fields make polar cases explicit too: `:always_above`
 (midnight sun) and `:always_below` (polar night).
 
+## What happens today, in order
+
+`day.events` is the same instants the struct already holds, sorted and
+tagged. Every entry has the same three keys — the azimuth of a sunrise or
+the distance of a perigee stays in its structured field, so nothing here
+needs pattern matching on optional keys.
+
+```elixir
+for e <- day.events do
+  %{
+    "time" => Calendar.strftime(e.at, "%H:%M:%S"),
+    "family" => to_string(e.family),
+    "event" => to_string(e.type)
+  }
+end
+|> Kino.DataTable.new(name: "#{day.date}, in order")
+```
+
+The families split in two. `:sun`, `:twilight` and `:moon` are
+**topocentric** — move, and they move. `:phase`, `:apsis`, `:node` and
+`:standstill` are **geocentric**: the same instants everywhere on Earth.
+Computing a set of plots, only the first three change.
+
+An absent entry is not a non-event: no `{:sun, :rise}` above the Arctic
+circle in June means the Sun never set, and `day.sun.state` is where that
+is written. The flat list cannot tell polar day from polar night — the
+struct can.
+
 ## A month at a glance
 
 ```elixir
@@ -146,11 +174,12 @@ apogee, node crossings, standstills — with the exact time, not just the day.
 The `eclipse` field on new/full moons is a screening flag: `:likely` means
 an eclipse happens somewhere on Earth around that instant.
 
-```elixir
-events = GreenCal.lunar_events(Date.range(today, Date.add(today, 60)))
+`lunar_timeline/2` returns them as one chronology, already sorted, each
+entry carrying its family's own extra key. (`lunar_events/2` is the same
+data grouped into four lists, when that shape suits you better.)
 
-for {kind, list} <- events,
-    e <- list do
+```elixir
+for e <- GreenCal.lunar_timeline(Date.range(today, Date.add(today, 60))) do
   extra =
     case e do
       %{eclipse: ecl} when ecl != :none -> "  ⚠ eclipse #{ecl}"
@@ -161,10 +190,9 @@ for {kind, list} <- events,
 
   %{
     "when (UTC)" => Calendar.strftime(e.at, "%Y-%m-%d %H:%M"),
-    "event" => "#{kind |> to_string() |> String.trim_trailing("s")}: #{e.type}#{extra}"
+    "event" => "#{e.family}: #{e.type}#{extra}"
   }
 end
-|> Enum.sort_by(& &1["when (UTC)"])
 |> Kino.DataTable.new(name: "Lunar events, next 60 days")
 ```
 
@@ -194,20 +222,23 @@ end
 
 ## Performance
 
-Pure arithmetic, no cache, no NIF — a day is ~2 ms, and days are
-independent so a year parallelizes on the schedulers:
+Pure arithmetic, no cache, no NIF. Days are independent, so a year spreads
+over the schedulers; the four geocentric searches are independent of each
+other, so they parallelize too — and identically, down to the last bit.
+
+`events: false` skips those four searches for code that only reads the Sun.
 
 ```elixir
 range = Date.range(~D[2026-01-01], ~D[2026-12-31])
 
-{us_seq, _} = :timer.tc(fn -> GreenCal.calendar(loc, range) end)
-{us_par, _} = :timer.tc(fn -> GreenCal.calendar(loc, range, parallel: true) end)
-{us_ev, _} = :timer.tc(fn -> GreenCal.lunar_events(range) end)
+time = fn fun -> "#{div(elem(:timer.tc(fun), 0), 1000)} ms" end
 
 %{
-  "calendar/3, 365 days" => "#{div(us_seq, 1000)} ms",
-  "calendar/3, 365 days, parallel: true" => "#{div(us_par, 1000)} ms",
-  "lunar_events/2, one year" => "#{div(us_ev, 1000)} ms"
+  "calendar/3, 365 days" => time.(fn -> GreenCal.calendar(loc, range) end),
+  "calendar/3, parallel: true" => time.(fn -> GreenCal.calendar(loc, range, parallel: true) end),
+  "calendar/3, events: false" => time.(fn -> GreenCal.calendar(loc, range, events: false) end),
+  "lunar_timeline/2, one year" => time.(fn -> GreenCal.lunar_timeline(range) end),
+  "lunar_timeline/2, parallel: true" => time.(fn -> GreenCal.lunar_timeline(range, parallel: true) end)
 }
 ```
 
