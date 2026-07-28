@@ -35,8 +35,11 @@ defmodule GreenCal.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md LICENSE)
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      },
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 
@@ -44,7 +47,7 @@ defmodule GreenCal.MixProject do
     [
       main: "GreenCal",
       source_ref: "v#{@version}",
-      extras: ["README.md", "livebooks/green_cal.livemd"],
+      extras: ["README.md", "CHANGELOG.md", "livebooks/green_cal.livemd"],
       groups_for_modules: [
         "High-level API": [GreenCal],
         Astronomy: [
