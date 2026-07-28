@@ -73,11 +73,13 @@ produced, 0.2.0 produces identically.
 
 - `GreenCal.day/3` runs three geocentric searches it did not run before.
   0.1.1 already ran the fourth for `moon.node`, but that one is by far the
-  cheapest: 0.05 ms of the 0.93 ms the four now cost together. Measured on
-  one day at Paris, `day/3` goes from 2.8 ms to 3.6 ms — about +30%, not
-  the doubling a per-day event search might suggest, which is why the
-  default is `true` and the escape hatch is an option rather than the
-  other way round.
+  cheapest: 0.05 ms of the 0.93 ms the four now cost together. The added
+  cost depends on whether the day carries an event, since finding one
+  means bisecting for it — measured at Paris, a quiet day goes from 2.75
+  to 3.05 ms (+0.3), a day carrying a new moon from 2.84 to 3.6 ms
+  (+0.76). Nowhere near the doubling a per-day event search might suggest,
+  which is why the default is `true` and the escape hatch is an option
+  rather than the other way round.
 
 - `lunar_timeline/2` and `lunar_events/2` raise `ArgumentError` on a
   descending `Date.Range` instead of quietly returning nothing. 0.1.1
