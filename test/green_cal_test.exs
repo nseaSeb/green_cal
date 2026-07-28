@@ -305,6 +305,19 @@ defmodule GreenCalTest do
   end
 
   describe "polar edge cases" do
+    test "apparent midnight sun starts below the Arctic circle" do
+      # Rise/set is defined at h₀ = -0.8333° (refraction + semidiameter),
+      # not at the geometric horizon, so the Sun stops setting about a
+      # degree south of the Arctic circle (66.56°). At 66.0° on the June
+      # solstice it bottoms out at -0.56° — above the threshold.
+      assert GreenCal.day({66.0, 0.0}, ~D[2026-06-21]).sun.state == :always_above
+
+      # Below the apparent limit (~65.7°) the Sun still sets, barely.
+      day = GreenCal.day({65.0, 0.0}, ~D[2026-06-21])
+      assert day.sun.state == :normal
+      assert %DateTime{} = day.sun.set
+    end
+
     test "midnight sun day" do
       day = GreenCal.day(@tromso, ~D[2026-06-21])
       assert day.sun.state == :always_above

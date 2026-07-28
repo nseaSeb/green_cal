@@ -5,11 +5,24 @@ defmodule GreenCal.PropertyTest do
   alias GreenCal.Astro
   alias GreenCal.Astro.Time
 
-  # |lat| ≤ 66°: outside polar circles, so sun rise/set exist every day and
-  # ordering properties are unconditional.
+  # Latitudes where the Sun provably rises and sets every day of the year,
+  # so the ordering properties below are unconditional.
+  #
+  # The bound is NOT the Arctic circle (66.56°). Rise/set is defined at
+  # h₀ = −0.8333° (refraction + semidiameter), not at the geometric
+  # horizon, so the apparent midnight sun starts about a degree lower:
+  #
+  #     90° − 23.44° (max declination) − 0.83° ≈ 65.7°
+  #
+  # At 66.0° on the June solstice the Sun bottoms out at −0.56°, above the
+  # threshold, and never sets — which is what the library correctly
+  # reports. 65.0° leaves a safe margin.
+  @max_temperate_latitude 65.0
+
   defp temperate_location do
     gen all(
-          lat <- StreamData.float(min: -66.0, max: 66.0),
+          lat <-
+            StreamData.float(min: -@max_temperate_latitude, max: @max_temperate_latitude),
           lon <- StreamData.float(min: -180.0, max: 180.0)
         ) do
       {lat, lon}
