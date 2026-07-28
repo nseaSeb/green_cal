@@ -1,0 +1,259 @@
+# GreenCal — agricultural sun & moon calendar
+
+```elixir
+Mix.install([
+  {:green_cal, path: Path.join(__DIR__, "..")},
+  {:kino, "~> 0.14"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+
+alias VegaLite, as: Vl
+```
+
+## Pick a location
+
+Change these three values and re-run everything below.
+
+```elixir
+lat_input = Kino.Input.number("Latitude (°, North positive)", default: 45.90)
+lon_input = Kino.Input.number("Longitude (°, East positive)", default: -0.83)
+elev_input = Kino.Input.number("Elevation (m)", default: 40)
+
+Kino.Layout.grid([lat_input, lon_input, elev_input], columns: 3)
+```
+
+```elixir
+loc = {Kino.Input.read(lat_input), Kino.Input.read(lon_input)}
+elevation = Kino.Input.read(elev_input) * 1.0
+opts = [elevation: elevation]
+:ok
+```
+
+## One day, in full
+
+Everything GreenCal knows about a single civil day: sun, twilight, moon,
+the three lunar cycles, and the sidereal constellation.
+
+```elixir
+day = GreenCal.day(loc, Date.utc_today(), opts)
+```
+
+A `nil` moonrise is not a bug: about one day per month the Moon simply does
+not rise (it rises ~50 minutes later every day, and eventually skips a civil
+day). The `:state` fields make polar cases explicit too: `:always_above`
+(midnight sun) and `:always_below` (polar night).
+
+## A month at a glance
+
+```elixir
+today = Date.utc_today()
+month = GreenCal.calendar(loc, Date.range(today, Date.add(today, 29)), opts)
+
+fmt = fn
+  nil -> "—"
+  %DateTime{} = dt -> Calendar.strftime(dt, "%H:%M")
+end
+
+month
+|> Enum.map(fn d ->
+  %{
+    "date" => Calendar.strftime(d.date, "%a %d %b"),
+    "sunrise" => fmt.(d.sun.rise),
+    "sunset" => fmt.(d.sun.set),
+    "day (h)" => d.sun.day_length_minutes && Float.round(d.sun.day_length_minutes / 60, 1),
+    "moonrise" => fmt.(d.moon.rise),
+    "moonset" => fmt.(d.moon.set),
+    "phase" => d.moon.phase,
+    "moon %" => round(d.moon.illuminated_fraction * 100),
+    "cycle" => d.moon.trend,
+    "constellation" => d.constellation,
+    "organ" => d.organ,
+    "node" => (d.moon.node && "#{d.moon.node.type} #{fmt.(d.moon.node.at)}") || ""
+  }
+end)
+|> Kino.DataTable.new(name: "Times are UTC")
+```
+
+## Day length over the year
+
+The envelope of the growing season: photoperiod drives bolting, dormancy
+and harvest windows.
+
+```elixir
+year = GreenCal.calendar(loc, Date.range(~D[2026-01-01], ~D[2026-12-31]), opts)
+
+day_length_data =
+  for d <- year, d.sun.day_length_minutes do
+    %{"date" => Date.to_iso8601(d.date), "hours" => d.sun.day_length_minutes / 60}
+  end
+
+Vl.new(width: 640, height: 260, title: "Day length — 2026 (hours)")
+|> Vl.data_from_values(day_length_data)
+|> Vl.mark(:line, color: "#2a78d6", stroke_width: 2, tooltip: true)
+|> Vl.encode_field(:x, "date", type: :temporal, title: nil, axis: [grid: false])
+|> Vl.encode_field(:y, "hours",
+  type: :quantitative,
+  title: nil,
+  axis: [grid_color: "#eeeeee", tick_count: 6]
+)
+```
+
+## The two cycles people conflate
+
+**Waxing/waning** follows the illumination (synodic month, 29.5 days).
+**Ascending/descending** follows the declination (tropical month, 27.3 days).
+They drift against each other — which is why "sow on a waxing, descending
+moon" needs both curves, and why implementations that derive one from the
+other are wrong.
+
+```elixir
+two_months = GreenCal.calendar(loc, Date.range(today, Date.add(today, 59)), opts)
+
+illumination =
+  for d <- two_months do
+    %{"date" => Date.to_iso8601(d.date), "value" => d.moon.illuminated_fraction * 100}
+  end
+
+declination =
+  for d <- two_months do
+    %{"date" => Date.to_iso8601(d.date), "value" => d.moon.declination}
+  end
+
+illum_chart =
+  Vl.new(width: 640, height: 180, title: "Illuminated fraction (%) — waxing / waning")
+  |> Vl.data_from_values(illumination)
+  |> Vl.mark(:line, color: "#2a78d6", stroke_width: 2, tooltip: true)
+  |> Vl.encode_field(:x, "date", type: :temporal, title: nil, axis: [grid: false])
+  |> Vl.encode_field(:y, "value", type: :quantitative, title: nil, axis: [grid_color: "#eeeeee"])
+
+decl_chart =
+  Vl.new(width: 640, height: 180, title: "Declination (°) — ascending / descending")
+  |> Vl.data_from_values(declination)
+  |> Vl.mark(:line, color: "#eb6834", stroke_width: 2, tooltip: true)
+  |> Vl.encode_field(:x, "date", type: :temporal, title: nil, axis: [grid: false])
+  |> Vl.encode_field(:y, "value", type: :quantitative, title: nil, axis: [grid_color: "#eeeeee"])
+
+Kino.Layout.grid([illum_chart, decl_chart], columns: 1)
+```
+
+Two separate charts on purpose: percent and degrees are different scales,
+and a dual-axis chart would invite reading intersections that mean nothing.
+
+## The printed-calendar symbols, as exact instants
+
+Everything a paper lunar calendar marks with a glyph — phases, perigee and
+apogee, node crossings, standstills — with the exact time, not just the day.
+The `eclipse` field on new/full moons is a screening flag: `:likely` means
+an eclipse happens somewhere on Earth around that instant.
+
+```elixir
+events = GreenCal.lunar_events(Date.range(today, Date.add(today, 60)))
+
+for {kind, list} <- events,
+    e <- list do
+  extra =
+    case e do
+      %{eclipse: ecl} when ecl != :none -> "  ⚠ eclipse #{ecl}"
+      %{distance_km: d} -> "  #{round(d)} km"
+      %{declination: d} -> "  δ = #{Float.round(d, 1)}°"
+      _ -> ""
+    end
+
+  %{
+    "when (UTC)" => Calendar.strftime(e.at, "%Y-%m-%d %H:%M"),
+    "event" => "#{kind |> to_string() |> String.trim_trailing("s")}: #{e.type}#{extra}"
+  }
+end
+|> Enum.sort_by(& &1["when (UTC)"])
+|> Kino.DataTable.new(name: "Lunar events, next 60 days")
+```
+
+## Matching a printed biodynamic calendar
+
+The default constellation mapping is the equal-sector sidereal zodiac.
+Printed calendars (Maria Thun et al.) use the real, unequal IAU
+boundaries — 13 constellations including Ophiuchus. Compare:
+
+```elixir
+for d <- GreenCal.calendar(loc, Date.range(today, Date.add(today, 13))) do
+  {iau, _} =
+    GreenCal.constellation_of(
+      GreenCal.Astro.moon(GreenCal.Astro.Time.julian_day(d.date) + 0.5).longitude,
+      d.date,
+      boundaries: :iau
+    )
+
+  %{
+    "date" => Calendar.strftime(d.date, "%a %d %b"),
+    "equal sidereal" => d.constellation,
+    "IAU (Thun)" => iau
+  }
+end
+|> Kino.DataTable.new(name: "Two constellation conventions")
+```
+
+## Performance
+
+Pure arithmetic, no cache, no NIF — a day is ~2 ms, and days are
+independent so a year parallelizes on the schedulers:
+
+```elixir
+range = Date.range(~D[2026-01-01], ~D[2026-12-31])
+
+{us_seq, _} = :timer.tc(fn -> GreenCal.calendar(loc, range) end)
+{us_par, _} = :timer.tc(fn -> GreenCal.calendar(loc, range, parallel: true) end)
+{us_ev, _} = :timer.tc(fn -> GreenCal.lunar_events(range) end)
+
+%{
+  "calendar/3, 365 days" => "#{div(us_seq, 1000)} ms",
+  "calendar/3, 365 days, parallel: true" => "#{div(us_par, 1000)} ms",
+  "lunar_events/2, one year" => "#{div(us_ev, 1000)} ms"
+}
+```
+
+## Validation — the library against published references
+
+The test suite anchors the code to published values; here are two you can
+re-run interactively.
+
+**Meeus, *Astronomical Algorithms*, example 47.a** — the Moon on
+1992 April 12 at 0h TD (JDE 2448724.5):
+
+```elixir
+m = GreenCal.Astro.Moon.position(2_448_724.5)
+
+%{
+  longitude: {Float.round(m.longitude, 5), published: 133.167265},
+  latitude: {Float.round(m.latitude, 5), published: -3.229126},
+  distance_km: {Float.round(m.distance_km, 1), published: 368_409.7}
+}
+```
+
+**The full moon of 2026 January 3, 10:03 UTC** (USNO/timeanddate):
+
+```elixir
+jd = GreenCal.Astro.Time.julian_day(~U[2026-01-03 10:03:00Z])
+GreenCal.Astro.phase(jd)
+```
+
+Elongation within half a degree of 180° at the published instant — the
+phase machinery, ΔT handling and both ephemerides all have to be right at
+once for that to happen.
+
+## Why ΔT matters
+
+The ephemeris series run on Terrestrial Time; sunrise runs on Earth's
+rotation (UT). The gap — ΔT, about 69 s today — grows over decades. Skip it
+and every lunar longitude is ~38″ off; apply it on the wrong side and rise
+times shift by a minute. GreenCal applies it in exactly one place
+(`GreenCal.Astro`), and you can override it:
+
+```elixir
+jd = GreenCal.Astro.Time.julian_day(~U[2026-07-28 12:00:00Z])
+
+%{
+  delta_t_seconds: Float.round(GreenCal.Astro.Time.delta_t(jd), 1),
+  moon_longitude: GreenCal.Astro.moon(jd).longitude,
+  moon_longitude_without_delta_t: GreenCal.Astro.moon(jd, delta_t: 0).longitude
+}
+```
