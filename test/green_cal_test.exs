@@ -205,6 +205,24 @@ defmodule GreenCalTest do
       assert_in_delta day.sun.set_azimuth, 350, 15
     end
 
+    test "a civil day with two rises reports the paired rise/set and the full sunlight" do
+      # {-65.0, 123.75} on 2038-08-12: the UTC day is offset from the local
+      # one, so it holds rises at 00:00:32 and 23:57:07 with a single set at
+      # 07:40:45. The struct must pair the first rise with its own set, and
+      # day_length_minutes must count the trailing sunlight too.
+      day = GreenCal.day({-65.0, 123.75}, ~D[2038-08-12])
+
+      assert day.sun.rise == ~U[2038-08-12 00:00:32Z]
+      assert day.sun.set == ~U[2038-08-12 07:40:45Z]
+
+      paired = DateTime.diff(day.sun.set, day.sun.rise) / 60.0
+      assert_in_delta paired, 460.2, 0.5
+
+      # 2.9 more minutes of sun after the second rise, before midnight
+      assert_in_delta day.sun.day_length_minutes, 463.1, 0.5
+      assert day.sun.day_length_minutes > paired
+    end
+
     test "sub-hour polar day is found, not reported as polar night" do
       # {67.25, 7.5} on the 2026 winter solstice: the Sun is up ~55 min,
       # entirely between two whole-hour samples.

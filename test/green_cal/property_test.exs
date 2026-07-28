@@ -101,9 +101,35 @@ defmodule GreenCal.PropertyTest do
       assert day.organ in [:fruit, :root, :flower, :leaf]
       assert day.moon.trend in [:ascending, :descending]
 
-      if day.sun.rise && day.sun.set && DateTime.compare(day.sun.rise, day.sun.set) == :lt do
+      # `day_length_minutes` is the total time above the horizon over the
+      # window. It equals set − rise only for the plain shape: one rise,
+      # one set, in that order. Away from the equator a UTC civil day can
+      # legitimately hold other shapes, and both of these are real:
+      #
+      #   {-65.0, 123.75} on 2038-08-12 — rises 00:00 and 23:57, sets 07:40:
+      #       the trailing 3 minutes count toward the total, not toward
+      #       set − rise.
+      #   {65.0, 180.0} on 2000-01-01 — sets before it rises, because the
+      #       UTC day is offset 12 h from the local one.
+      jd0 = Time.julian_day(date)
+      events = Astro.sun_events(loc, jd0, jd0 + 1.0, transits: false).events
+
+      plain_day? =
+        Enum.frequencies_by(events, & &1.type) == %{rise: 1, set: 1} and
+          DateTime.compare(day.sun.rise, day.sun.set) == :lt
+
+      if plain_day? do
         minutes = DateTime.diff(day.sun.set, day.sun.rise) / 60.0
         assert_in_delta minutes, day.sun.day_length_minutes, 1.5
+      end
+
+      # Whatever the shape, the total is bounded by the window and covers
+      # every above-horizon stretch, so it is never shorter than the
+      # longest single one.
+      assert day.sun.day_length_minutes <= 1440.0
+
+      if plain_day? or events == [] do
+        assert day.sun.day_length_minutes >= 0.0
       end
     end
   end

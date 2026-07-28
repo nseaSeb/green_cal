@@ -112,7 +112,7 @@ labels the latter for what it is.
 ```elixir
 def deps do
   [
-    {:green_cal, "~> 0.1.0"}
+    {:green_cal, "~> 0.1.1"}
   ]
 end
 ```

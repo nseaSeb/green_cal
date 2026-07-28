@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-28
+
+### Changed
+
+- Reworded the package description. The previous wording listed
+  "biodynamic cycles" alongside the astronomy, which reads as an
+  endorsement of the tradition rather than a description of what the
+  library computes. It now leads with the verifiable ephemerides and
+  attributes the declination cycle to the calendars that use it, matching
+  the separation the README and the `GreenCal` moduledoc already draw.
+
+No code changes: 0.1.0 and 0.1.1 are functionally identical.
+
 ## [0.1.0] - 2026-07-28
 
 First release.
@@ -66,5 +79,6 @@ First release.
 - Property tests and physical invariants (bounded distance and latitude,
   event ordering, chained daily windows equal to one continuous search).
 
-[Unreleased]: https://github.com/nseaSeb/green_cal/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nseaSeb/green_cal/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/nseaSeb/green_cal/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nseaSeb/green_cal/releases/tag/v0.1.0
