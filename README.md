@@ -1,5 +1,7 @@
 # GreenCal 🌱🌙
 
+[![CI](https://github.com/nseaSeb/green_cal/actions/workflows/ci.yml/badge.svg)](https://github.com/nseaSeb/green_cal/actions/workflows/ci.yml)
+
 Agricultural sun & moon calendar for Elixir — **pure arithmetic, zero
 dependencies, no time zone database required**.
 
