@@ -90,13 +90,16 @@ produced, 0.2.0 produces identically.
   means bisecting for it — measured at Paris, a quiet day goes from 2.75
   to 3.05 ms (+0.3), a day carrying a new moon from 2.84 to 3.6 ms
   (+0.76). Nowhere near the doubling a per-day event search might suggest,
-  which is why the default is `true` and the escape hatch is an option
-  rather than the other way round.
+  which is what made it affordable to run them unconditionally — see
+  "Considered and rejected" below for the option that is *not* there.
 
-- `lunar_timeline/2` and `lunar_events/2` raise `ArgumentError` on a
-  descending `Date.Range` instead of quietly returning nothing. 0.1.1
-  handed the finders a backwards window, which they sampled the wrong way
-  round.
+- `lunar_timeline/2` and `lunar_events/2` raise `ArgumentError` unless the
+  range is contiguous and ascending (`step: 1`, `first <= last`). They
+  search one continuous window, so any other range makes them report
+  events for dates `calendar/3` returns no day for: 0.1.1 sampled a
+  descending range backwards, and answered about a whole month for
+  `Date.range(~D[2026-08-01], ~D[2026-08-31], 7)`, which contains five
+  days, or for the same range with `step: -1`, which contains none.
 
 - `calendar/3` is documented as computing each day exactly as `day/3`
   would, so the two agree bit for bit in every time zone. Sharing one
@@ -106,6 +109,16 @@ produced, 0.2.0 produces identically.
   the range is cut — and it made `calendar/3` disagree with `day/3` by a
   few milliseconds under a `:time_zone`, where a DST day is 23 or 25 hours
   long and the sampling grids stop lining up.
+
+### Fixed
+
+- A property test asserted that the Sun both rises and sets within the
+  **UTC** civil day at any temperate latitude. Far from Greenwich it need
+  not: at `{65.0, 112.5}` on 2035-10-27 the Sun rises at 23:59:50Z the day
+  before, so the UTC day holds only a transit and a set — the library was
+  right and the assertion was wrong. It now uses the local solar day,
+  which is what the latitude bound was ever about. Present since 0.1.0 and
+  failing on roughly one seed in thirty.
 
 ### Considered and rejected
 

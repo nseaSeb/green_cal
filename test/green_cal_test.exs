@@ -468,19 +468,54 @@ defmodule GreenCalTest do
       end
     end
 
+    # Every Day.Moon field that can hold an event instant, and the family
+    # its entry must appear under. A field missing from here is a field
+    # project_events/1 was never taught about.
+    @geocentric_fields %{
+      phase_change: :phase,
+      apsis: :apsis,
+      node: :node,
+      standstill: :standstill
+    }
+
     test "no geocentric field escapes the projection" do
-      # Catches a fifth event field being added to Day.Moon without being
-      # projected — as soon as it is non-nil on any day of the month.
+      # Catches a fifth event field added to Day.Moon and not projected —
+      # on the first day of the month where it holds an instant.
       for date <- Date.range(~D[2026-08-01], ~D[2026-08-31]) do
         day = GreenCal.day(@paris, date)
-        families = day.events |> Enum.map(& &1.family) |> MapSet.new()
+        events = MapSet.new(day.events, &{&1.family, &1.type, &1.at})
 
         for {key, value} <- Map.from_struct(day.moon),
             is_map(value) and Map.has_key?(value, :at) do
-          assert Enum.any?(families, &(&1 in [:phase, :apsis, :node, :standstill])),
-                 "#{key} holds an instant on #{date} but no geocentric family is in :events"
+          family = Map.get(@geocentric_fields, key)
+
+          assert family,
+                 "Day.Moon.#{key} holds an instant on #{date}, but nothing maps it to " <>
+                   "an :events family — project_events/1 has almost certainly not been told"
+
+          assert MapSet.member?(events, {family, value.type, value.at}),
+                 "Day.Moon.#{key} holds #{value.type} at #{value.at} on #{date}, " <>
+                   "missing from :events"
         end
       end
+    end
+
+    test "the projection guard above actually fails when a field is unprojected" do
+      # Guards that cannot fail are worse than no guard. Simulate the
+      # regression — a fifth instant-bearing field — and check the mapping
+      # lookup rejects it.
+      moon = %{GreenCal.day(@paris, ~D[2026-08-12]).moon | state: :normal}
+
+      rogue =
+        Map.put(Map.from_struct(moon), :eclipse_peak, %{type: :total, at: DateTime.utc_now()})
+
+      unmapped =
+        for {key, value} <- rogue,
+            is_map(value) and Map.has_key?(value, :at),
+            Map.get(@geocentric_fields, key) == nil,
+            do: key
+
+      assert unmapped == [:eclipse_peak]
     end
 
     test "entries are uniform: three keys, no optional extras" do
@@ -659,15 +694,26 @@ defmodule GreenCalTest do
       end
     end
 
-    test "rejects a descending range instead of quietly returning nothing" do
+    test "rejects any range it cannot answer about honestly" do
+      # Each of these would otherwise report events for dates calendar/3
+      # returns no day for — the descending one sampled backwards, the
+      # empty one over a month it does not contain, the stepped one over
+      # the 26 days between its 5 dates.
       descending = Date.range(~D[2026-08-31], ~D[2026-08-01], -1)
+      empty = Date.range(~D[2026-08-01], ~D[2026-08-31], -1)
+      stepped = Date.range(~D[2026-08-01], ~D[2026-08-31], 7)
 
-      assert_raise ArgumentError, ~r/ascending date range/, fn ->
-        GreenCal.lunar_timeline(descending)
-      end
+      assert Enum.to_list(empty) == []
+      assert length(Enum.to_list(stepped)) == 5
 
-      assert_raise ArgumentError, ~r/ascending date range/, fn ->
-        GreenCal.lunar_events(descending)
+      for range <- [descending, empty, stepped] do
+        assert_raise ArgumentError, ~r/contiguous ascending/, fn ->
+          GreenCal.lunar_timeline(range)
+        end
+
+        assert_raise ArgumentError, ~r/contiguous ascending/, fn ->
+          GreenCal.lunar_events(range)
+        end
       end
     end
   end

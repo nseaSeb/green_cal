@@ -307,13 +307,17 @@ defmodule GreenCal do
   Times are UTC `DateTime`s, or local ones with the `:time_zone` option.
   """
   @spec lunar_timeline(Date.Range.t(), keyword()) :: [map()]
-  def lunar_timeline(%Date.Range{first: first, last: last} = range, opts \\ []) do
-    # A descending range would hand the finders a backwards window, which
-    # they would sample the wrong way round and quietly report as empty.
-    if Date.compare(first, last) == :gt do
+  def lunar_timeline(%Date.Range{first: first, last: last, step: step} = range, opts \\ []) do
+    # This searches one contiguous window, so it only means anything for a
+    # range that *is* one. A descending range would be sampled backwards;
+    # a stepped one covers days it does not contain — either would report
+    # events for dates `calendar/3` returns no day for, which is precisely
+    # the kind of quiet disagreement the rest of this module works to
+    # rule out. Refuse both rather than answer about the wrong dates.
+    if step != 1 or Date.compare(first, last) == :gt do
       raise ArgumentError,
-            "lunar_timeline/2 and lunar_events/2 need an ascending date range, " <>
-              "got: #{inspect(range)}"
+            "lunar_timeline/2 and lunar_events/2 need a contiguous ascending " <>
+              "date range (step 1, first <= last), got: #{inspect(range)}"
     end
 
     {parallel, opts} = Keyword.pop(opts, :parallel, false)

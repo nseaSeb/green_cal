@@ -15,7 +15,8 @@ defmodule GreenCal.Day do
   civil day and reported to the second.
 
   **Scalars** are a snapshot taken at `sampled_at`, the middle of the civil
-  day (local noon when a `:time_zone` is given). That covers every number
+  day — local noon on a 24 h day, half an hour off it on the two DST days
+  a year that run 23 or 25 hours. That covers every number
   and label the day carries: `moon.phase`, `moon.elongation`,
   `moon.illuminated_fraction`, `moon.distance_km`, `moon.declination`,
   `moon.ecliptic_latitude`, the three `*_trend` fields (computed from ±12 h

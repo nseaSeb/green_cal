@@ -64,8 +64,14 @@ defmodule GreenCal.PropertyTest do
   end
 
   property "sun events are ordered and located on the horizon" do
-    check all(loc <- temperate_location(), date <- date_2000_2049(), max_runs: 25) do
-      jd0 = Time.julian_day(date)
+    check all({_lat, lon} = loc <- temperate_location(), date <- date_2000_2049(), max_runs: 25) do
+      # The window is the *local* solar day, not the UTC one. What
+      # @max_temperate_latitude guarantees is that the Sun rises and sets
+      # once per local day; a UTC-anchored window far from Greenwich can
+      # clip one of the two out, and that is the library being right, not
+      # wrong. Real case: {65.0, 112.5} on 2035-10-27 rises at 23:59:50Z
+      # the day before, so the UTC day holds only a transit and a set.
+      jd0 = Time.julian_day(date) - lon / 360.0
       result = Astro.sun_events(loc, jd0, jd0 + 1.0)
 
       assert result.state == :normal
@@ -170,10 +176,15 @@ defmodule GreenCal.PropertyTest do
       times = Enum.map(day.events, & &1.at)
       assert times == Enum.sort(times, DateTime)
 
-      # Every instant belongs to the day it is reported on: within the
-      # civil-day window, allowing the one-second rounding at its end.
+      # Every instant belongs to the day it is reported on. The only
+      # instant allowed to carry the next date is one that landed exactly
+      # on the closing midnight and rounded up to the second.
       for at <- times do
-        assert Date.diff(DateTime.to_date(at), date) in 0..1
+        case Date.diff(DateTime.to_date(at), date) do
+          0 -> :ok
+          1 -> assert DateTime.to_time(at) == ~T[00:00:00]
+          other -> flunk("#{at} is #{other} days off #{date}")
+        end
       end
     end
   end
